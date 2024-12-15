@@ -134,7 +134,7 @@ No request body needed, just ensure `video_id` and `comment_id` are in the URL p
 
 #### Get Top Comments for a Video
 
-**GET /comments/top?video_id=f047b6d1-62e6-4c56-95d9-9d52a0b849d7&page=1&limit=10**
+**GET /comments/top?video_id=f047b6d1-62e6-4c56-95d9-9d52a0b849d7&limit=10**
 
 You can optionally use a `filter` query parameter to get comments based on their order:
 - `filter=newest` - fetches the most recent comments.

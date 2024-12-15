@@ -113,7 +113,7 @@ app.put('/comments/:video_id/:comment_id/like', async (req: Request, res: Respon
 
 // Route to fetch top comments based on a filter (newest or top)
 app.get('/comments/top', async (req: Request, res: Response): Promise<void> => {
-  const { video_id, filter, page = 1, limit = 10 } = req.query;
+  const { video_id, filter, limit = 10 } = req.query;
 
   // Validate the required parameter video_id
   if (!video_id) {
@@ -129,13 +129,7 @@ app.get('/comments/top', async (req: Request, res: Response): Promise<void> => {
   }
 
   // Validate pagination parameters
-  const pageNumber = parseInt(page as string, 10);
   const limitNumber = parseInt(limit as string, 10);
-
-  if (isNaN(pageNumber) || pageNumber <= 0) {
-    res.status(400).json({ error: 'Invalid page number' });
-    return;
-  }
 
   if (isNaN(limitNumber) || limitNumber <= 0) {
     res.status(400).json({ error: 'Invalid limit' });
@@ -157,6 +151,7 @@ app.get('/comments/top', async (req: Request, res: Response): Promise<void> => {
     // Fetch comments with pagination
     const result = await client.execute(query, [video_id, limitNumber], { prepare: true });
 
+    
     // Fetch the total count of comments for the given video
     const countResult = await client.execute(countQuery, [video_id], { prepare: true });
     const totalComments = countResult.rows[0]?.count || 0;
@@ -178,7 +173,6 @@ app.get('/comments/top', async (req: Request, res: Response): Promise<void> => {
     res.status(200).json({
       video_id,
       total_comments: totalComments,
-      current_page: pageNumber,
       total_pages: Math.ceil(totalComments / limitNumber),
       comments: sortedComments,
     });
