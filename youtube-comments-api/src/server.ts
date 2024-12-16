@@ -86,25 +86,49 @@ app.post('/comments/:comment_id/replies', async (req: Request, res: Response): P
 app.put('/comments/:video_id/:comment_id/like', async (req: Request, res: Response): Promise<void> => {
   const { video_id, comment_id } = req.params;
 
-  // Fetch the current number of likes
+  // Fetch the current comment details
   const selectQuery = `
-    SELECT likes FROM comments
-    WHERE video_id = ? AND comment_id = ?;
+    SELECT video_id, comment_id, user_id, content, likes, replies_count, timestamp
+    FROM comments
+    WHERE video_id = ? AND comment_id = ? ALLOW FILTERING;
   `;
 
   try {
+    // Fetch the existing comment
     const result = await client.execute(selectQuery, [video_id, comment_id], { prepare: true });
-    const currentLikes = result.rows[0]?.likes || 0;
+    const comment = result.rows[0];
 
-    // Update the likes count
-    const updateQuery = `
-      UPDATE comments
-      SET likes = ?
-      WHERE video_id = ? AND comment_id = ?;
+    if (!comment) {
+      res.status(404).json({ error: 'Comment not found' });
+      return;
+    }
+
+    // Increment the likes count
+    const newLikes = comment.likes + 1;
+
+    // Delete the old row
+    const deleteQuery = `
+      DELETE FROM comments
+      WHERE video_id = ? AND likes = ? AND timestamp = ? AND comment_id = ?;
     `;
-    await client.execute(updateQuery, [currentLikes + 1, video_id, comment_id], { prepare: true });
+    await client.execute(deleteQuery, [video_id, comment.likes, comment.timestamp, comment_id], { prepare: true });
 
-    res.status(200).json({ message: 'Like added' });
+    // Insert a new row with the updated likes
+    const insertQuery = `
+      INSERT INTO comments (video_id, comment_id, user_id, content, likes, replies_count, timestamp)
+      VALUES (?, ?, ?, ?, ?, ?, ?);
+    `;
+    await client.execute(insertQuery, [
+      video_id,
+      comment_id,
+      comment.user_id,
+      comment.content,
+      newLikes,
+      comment.replies_count,
+      comment.timestamp,
+    ], { prepare: true });
+
+    res.status(200).json({ message: 'Like added', likes: newLikes });
   } catch (err: any) {
     console.error("Error updating likes:", err);
     res.status(500).json({ error: 'An error occurred while updating likes' });
@@ -113,7 +137,7 @@ app.put('/comments/:video_id/:comment_id/like', async (req: Request, res: Respon
 
 // Route to fetch top comments based on a filter (newest or top)
 app.get('/comments/top', async (req: Request, res: Response): Promise<void> => {
-  const { video_id, filter, limit = 10 } = req.query;
+  const { video_id, filter, limit = 10, pageState } = req.query;
 
   // Validate the required parameter video_id
   if (!video_id) {
@@ -130,17 +154,21 @@ app.get('/comments/top', async (req: Request, res: Response): Promise<void> => {
 
   // Validate pagination parameters
   const limitNumber = parseInt(limit as string, 10);
-
   if (isNaN(limitNumber) || limitNumber <= 0) {
     res.status(400).json({ error: 'Invalid limit' });
     return;
   }
 
-  const query = `
+  // Construct the query based on filter
+  let query = `
     SELECT * FROM youtube_comments.comments
-    WHERE video_id = ? LIMIT ?
-    ALLOW FILTERING;
+    WHERE video_id = ? 
   `;
+  if (filter === 'top') {
+    query += `ORDER BY likes DESC, timestamp DESC`;
+  } else if (filter === 'newest') {
+    query += `ORDER BY timestamp DESC`;
+  }
 
   const countQuery = `
     SELECT COUNT(*) FROM youtube_comments.comments
@@ -148,33 +176,26 @@ app.get('/comments/top', async (req: Request, res: Response): Promise<void> => {
   `;
 
   try {
-    // Fetch comments with pagination
-    const result = await client.execute(query, [video_id, limitNumber], { prepare: true });
-
-    
     // Fetch the total count of comments for the given video
     const countResult = await client.execute(countQuery, [video_id], { prepare: true });
     const totalComments = countResult.rows[0]?.count || 0;
 
-    let sortedComments = result.rows;
+    // Fetch comments with pagination using pageState
+    const options = {
+      pageState: pageState as string | undefined,
+      prepare: true,
+      fetchSize: limitNumber,
+    };
 
-    // Apply sorting based on filter
-    if (filter === 'top') {
-      sortedComments = sortedComments
-        .sort((a, b) => b.likes - a.likes || b.timestamp - a.timestamp)
-        .slice(0, limitNumber);
-    } else if (filter === 'newest') {
-      sortedComments = sortedComments
-        .sort((a, b) => b.timestamp - a.timestamp)
-        .slice(0, limitNumber);
-    }
+    const result = await client.execute(query, [video_id], options);
 
     // Return the response
     res.status(200).json({
       video_id,
       total_comments: totalComments,
       total_pages: Math.ceil(totalComments / limitNumber),
-      comments: sortedComments,
+      comments: result.rows,
+      pageState: result.pageState,
     });
   } catch (err: any) {
     console.error("Error fetching top comments:", err);
